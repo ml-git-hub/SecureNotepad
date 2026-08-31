@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Secure Notepad - 管理后台</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <span>Secure Notepad · 管理后台</span>
+  <button id="themeToggle" class="btn-ghost" style="font-size:12px; padding:6px 10px;"></button>
+</header>
+<main class="admin-main">
+  <div id="login" class="admin-login">
+    <p class="muted">输入管理密钥（部署时通过 <code>wrangler secret put ADMIN_TOKEN</code> 设置）查看所有笔记的元数据（不含内容）。</p>
+    <input type="password" id="tokenInput" placeholder="管理密钥">
+    <button class="btn-primary" id="loginBtn">登录</button>
+    <div class="error" id="loginErr"></div>
+  </div>
+  <div id="panel" style="display:none;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span class="muted" id="countInfo"></span>
+      <button class="btn-primary" id="refreshBtn">刷新</button>
+    </div>
+    <table>
+      <thead><tr><th>笔记名</th><th>创建时间</th><th>最后更新</th><th>过期时间</th><th>模式</th><th></th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</main>
+<script>
+(function () {
+  var token = "";
+  var tokenInput = document.getElementById("tokenInput");
+  var loginBtn = document.getElementById("loginBtn");
+  var loginErr = document.getElementById("loginErr");
+  var loginDiv = document.getElementById("login");
+  var panelDiv = document.getElementById("panel");
+  var tbody = document.getElementById("tbody");
+  var countInfo = document.getElementById("countInfo");
+  var refreshBtn = document.getElementById("refreshBtn");
+
+  // ---------- 亮色 / 暗色主题（和笔记页共用同一个 localStorage key，保持一致） ----------
+  var themeBtn = document.getElementById("themeToggle");
+  function themeLabel(t) { return t === "light" ? "浅色模式" : "深色模式"; }
+  function applyTheme(t) {
+    document.documentElement.setAttribute("data-theme", t);
+    if (themeBtn) themeBtn.textContent = themeLabel(t);
+    try { localStorage.setItem("sn-theme", t); } catch (e) {}
+  }
+  (function initTheme() {
+    var saved = null;
+    try { saved = localStorage.getItem("sn-theme"); } catch (e) {}
+    applyTheme(saved === "light" ? "light" : "dark");
+  })();
+  if (themeBtn) {
+    themeBtn.onclick = function () {
+      var current = document.documentElement.getAttribute("data-theme") || "dark";
+      applyTheme(current === "dark" ? "light" : "dark");
+    };
+  }
+
+  function fmtTime(ms) {
+    if (!ms) return "-";
+    var d = new Date(ms);
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0") +
+      " " + String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+  }
+
+  function loadNotes() {
+    fetch("/api/admin/notes", { headers: { "Authorization": "Bearer " + token } })
+      .then(function (r) {
+        if (r.status === 401) throw new Error("密钥错误");
+        return r.json();
+      })
+      .then(function (data) {
+        loginDiv.style.display = "none";
+        panelDiv.style.display = "block";
+        countInfo.textContent = "共 " + data.notes.length + " 条笔记（最多显示 500 条）";
+        tbody.innerHTML = "";
+        data.notes.forEach(function (n) {
+          var tr = document.createElement("tr");
+
+          var tdName = document.createElement("td");
+          var link = document.createElement("a");
+          link.href = "/" + encodeURIComponent(n.id);
+          link.textContent = n.id;
+          link.target = "_blank";
+          tdName.appendChild(link);
+
+          var tdCreated = document.createElement("td");
+          tdCreated.textContent = fmtTime(n.created_at);
+
+          var tdUpdated = document.createElement("td");
+          tdUpdated.textContent = fmtTime(n.updated_at);
+
+          var tdExpires = document.createElement("td");
+          tdExpires.textContent = n.expires_at ? fmtTime(n.expires_at) : "永久";
+
+          var tdMode = document.createElement("td");
+          var tag = document.createElement("span");
+          tag.className = "tag " + (n.burn_after_read ? "tag-burn" : "tag-forever");
+          tag.textContent = n.burn_after_read ? "阅后即焚" : "普通";
+          tdMode.appendChild(tag);
+
+          var tdActions = document.createElement("td");
+          var delBtn = document.createElement("button");
+          delBtn.className = "danger";
+          delBtn.textContent = "删除";
+          delBtn.onclick = function () {
+            if (!confirm('确定删除笔记 "' + n.id + '" 吗？')) return;
+            fetch("/api/note/" + encodeURIComponent(n.id), { method: "DELETE" })
+              .then(function () { loadNotes(); });
+          };
+          tdActions.appendChild(delBtn);
+
+          tr.appendChild(tdName);
+          tr.appendChild(tdCreated);
+          tr.appendChild(tdUpdated);
+          tr.appendChild(tdExpires);
+          tr.appendChild(tdMode);
+          tr.appendChild(tdActions);
+          tbody.appendChild(tr);
+        });
+      })
+      .catch(function (e) {
+        loginErr.textContent = e.message || "加载失败";
+      });
+  }
+
+  loginBtn.onclick = function () {
+    token = tokenInput.value.trim();
+    if (!token) return;
+    loginErr.textContent = "";
+    loadNotes();
+  };
+  tokenInput.addEventListener("keydown", function (e) { if (e.key === "Enter") loginBtn.click(); });
+  refreshBtn.onclick = loadNotes;
+})();
+</script>
+</body>
+</html>

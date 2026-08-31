@@ -1,0 +1,148 @@
+/* Secure Notepad - 共享样式表
+   同时被 index.html（笔记编辑页）和 admin.html（管理后台）引用，
+   以后加新页面也直接 <link> 这一个文件即可保持视觉统一。 */
+
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --border: #2a2e37;
+  --text: #e6e8eb;
+  --muted: #8a8f98;
+  --accent: #4f8cff;
+  --danger: #ff5d5d;
+  --ok: #3ecf8e;
+}
+
+html[data-theme="light"] {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --border: #dfe2e8;
+  --text: #1a1d23;
+  --muted: #6b7280;
+  --accent: #2f6fed;
+  --danger: #d64545;
+  --ok: #1f9d63;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: var(--accent); }
+
+/* ---------- 顶部导航 ---------- */
+header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+header .brand { font-weight: 600; color: var(--text); text-decoration: none; }
+header .brand span { color: var(--accent); }
+#status { font-size: 13px; color: var(--muted); }
+
+/* ---------- 主体布局 ---------- */
+main {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  padding: 24px 16px 60px;
+}
+.card {
+  width: 100%;
+  max-width: 720px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
+}
+.card h2 { margin-top: 0; }
+.hint { color: var(--muted); font-size: 13px; margin-bottom: 18px; line-height: 1.6; }
+.muted { color: var(--muted); }
+
+/* ---------- 表单控件 ---------- */
+label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+input[type=text], input[type=password] {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+}
+select {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 14px;
+}
+.checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.checkbox-row input { width: auto; }
+.checkbox-row label { margin: 0; color: var(--text); font-size: 14px; }
+
+/* ---------- 按钮 ---------- */
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.btn-primary { background: var(--accent); color: white; }
+.btn-danger, button.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+.btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); white-space: nowrap; }
+.actions { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ---------- 笔记编辑区 ---------- */
+textarea {
+  width: 100%;
+  min-height: 55vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.6;
+  padding: 16px;
+  resize: vertical;
+  font-family: inherit;
+}
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.toolbar .meta { font-size: 12px; color: var(--muted); }
+textarea[readonly] { opacity: 0.85; cursor: default; }
+.error { color: var(--danger); font-size: 13px; margin-top: 10px; min-height: 18px; }
+.footer-note { text-align: center; color: var(--muted); font-size: 12px; padding: 20px; }
+
+/* ---------- 管理后台专属 ---------- */
+main.admin-main { display: block; max-width: 960px; margin: 0 auto; padding: 20px; }
+.admin-login input[type=password] { width: 260px; display: inline-block; }
+table { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 13px; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+.tag-burn { background: #3a2a15; color: #ffb454; }
+.tag-forever { background: #16342a; color: #3ecf8e; }

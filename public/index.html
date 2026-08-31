@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Secure Notepad - 加密在线记事本</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <a href="/" class="brand">Secure<span>Notepad</span></a>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div id="status"></div>
+      <button id="themeToggle" class="btn-ghost" style="font-size:12px; padding:6px 10px;"></button>
+    </div>
+  </header>
+  <main>
+    <div class="card" id="app"></div>
+  </main>
+  <div class="footer-note">内容仅在你的浏览器里加密/解密，服务器只保存密文。请牢记密码——没有找回方式。</div>
+
+<script>
+(function () {
+  var app = document.getElementById("app");
+  var statusEl = document.getElementById("status");
+
+  function setStatus(text) { statusEl.textContent = text || ""; }
+
+  // ---------- 亮色 / 暗色主题 ----------
+  var themeBtn = document.getElementById("themeToggle");
+  function themeLabel(t) { return t === "light" ? "浅色模式" : "深色模式"; }
+  function applyTheme(t) {
+    document.documentElement.setAttribute("data-theme", t);
+    if (themeBtn) themeBtn.textContent = themeLabel(t);
+    try { localStorage.setItem("sn-theme", t); } catch (e) {}
+  }
+  (function initTheme() {
+    var saved = null;
+    try { saved = localStorage.getItem("sn-theme"); } catch (e) {}
+    applyTheme(saved === "light" ? "light" : "dark");
+  })();
+  if (themeBtn) {
+    themeBtn.onclick = function () {
+      var current = document.documentElement.getAttribute("data-theme") || "dark";
+      applyTheme(current === "dark" ? "light" : "dark");
+    };
+  }
+
+  // ---------- 复制到剪贴板 ----------
+  function copyToClipboard(text, btn, restoreLabel) {
+    function done(ok) {
+      if (!btn) return;
+      btn.textContent = ok ? "已复制！" : "复制失败";
+      setTimeout(function () { btn.textContent = restoreLabel; }, 1500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }).catch(function () { fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+  function fallbackCopy(text, done) {
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      var ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      done(ok);
+    } catch (e) {
+      done(false);
+    }
+  }
+
+  function el(tag, attrs, children) {
+    var e = document.createElement(tag);
+    attrs = attrs || {};
+    for (var k in attrs) {
+      if (k === "class") e.className = attrs[k];
+      else if (k === "html") e.innerHTML = attrs[k];
+      else e.setAttribute(k, attrs[k]);
+    }
+    (children || []).forEach(function (c) { if (c) e.appendChild(c); });
+    return e;
+  }
+
+  function bufToB64(buf) {
+    var bytes = new Uint8Array(buf);
+    var bin = "";
+    for (var i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  function b64ToBuf(b64) {
+    var bin = atob(b64);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  function deriveKey(password, saltBuf) {
+    var enc = new TextEncoder();
+    return crypto.subtle.importKey("raw", enc.encode(password), { name: "PBKDF2" }, false, ["deriveKey"])
+      .then(function (keyMaterial) {
+        return crypto.subtle.deriveKey(
+          { name: "PBKDF2", salt: saltBuf, iterations: 250000, hash: "SHA-256" },
+          keyMaterial,
+          { name: "AES-GCM", length: 256 },
+          false,
+          ["encrypt", "decrypt"]
+        );
+      });
+  }
+
+  function encryptText(plainText, key) {
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var enc = new TextEncoder();
+    return crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, enc.encode(plainText))
+      .then(function (cipherBuf) {
+        return { ivB64: bufToB64(iv.buffer), ciphertextB64: bufToB64(cipherBuf) };
+      });
+  }
+
+  function decryptText(ciphertextB64, ivB64, key) {
+    var iv = new Uint8Array(b64ToBuf(ivB64));
+    var cipherBuf = b64ToBuf(ciphertextB64);
+    return crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, key, cipherBuf)
+      .then(function (plainBuf) {
+        return new TextDecoder().decode(plainBuf);
+      });
+  }
+
+  var noteId = decodeURIComponent(location.pathname.replace(/^\//, ""));
+
+  if (!noteId) {
+    renderHome();
+  } else {
+    setStatus("加载中...");
+    fetch("/api/note/" + encodeURIComponent(noteId))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        setStatus("");
+        if (data.exists) renderUnlock(noteId, data);
+        else renderCreate(noteId);
+      })
+      .catch(function () { setStatus(""); renderError("网络错误，请刷新重试"); });
+  }
+
+  function renderError(msg) {
+    app.innerHTML = "";
+    app.appendChild(el("div", { class: "error" }, [document.createTextNode(msg)]));
+  }
+
+  function randomId() {
+    var chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+    var bytes = crypto.getRandomValues(new Uint8Array(12));
+    var out = "";
+    for (var i = 0; i < bytes.length; i++) out += chars[bytes[i] % chars.length];
+    return out;
+  }
+
+  function checkNoteExists(id) {
+    return fetch("/api/note/" + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (data) { return !!data.exists; });
+  }
+
+  function renderHome() {
+    app.innerHTML = "";
+    var title = el("h2", {}, [document.createTextNode("打开或新建一个笔记")]);
+    var hint = el("div", { class: "hint" }, [document.createTextNode(
+      "自己写一个名字，或者点“随机生成”让系统给你一个没人用过的地址。就像 protectedtext 一样：谁知道这个名字，谁就能访问这篇笔记（但看不到内容，内容用你设置的密码加密）。"
+    )]);
+    var input = el("input", { type: "text", placeholder: "例如：my-secret-note-2026", style: "flex:1;" });
+
+    var randomBtn = el("button", { class: "btn-ghost" }, [document.createTextNode("随机生成")]);
+    randomBtn.onclick = function () {
+      randomBtn.disabled = true;
+      randomBtn.textContent = "生成中...";
+      function tryOnce(attemptsLeft) {
+        var candidate = randomId();
+        checkNoteExists(candidate).then(function (exists) {
+          if (!exists || attemptsLeft <= 0) {
+            input.value = candidate;
+            input.focus();
+            randomBtn.disabled = false;
+            randomBtn.textContent = "随机生成";
+          } else {
+            tryOnce(attemptsLeft - 1); // 撞上了（概率极低），换一个再试
+          }
+        }).catch(function () {
+          // 网络异常时不阻塞用户，直接用生成的地址
+          input.value = candidate;
+          input.focus();
+          randomBtn.disabled = false;
+          randomBtn.textContent = "随机生成";
+        });
+      }
+      tryOnce(5);
+    };
+
+    var goBtn = el("button", { class: "btn-primary" }, [document.createTextNode("打开 / 新建")]);
+    goBtn.onclick = function () {
+      var name = input.value.trim();
+      if (!name) return;
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) {
+        alert("名字只能包含字母、数字、- 和 _，长度1-64");
+        return;
+      }
+      goBtn.disabled = true;
+      goBtn.textContent = "检查中...";
+      checkNoteExists(name).then(function (exists) {
+        goBtn.disabled = false;
+        goBtn.textContent = "打开 / 新建";
+        if (exists) {
+          var proceed = confirm(
+            '名字 "' + name + '" 已经被使用了。\n\n' +
+            '如果这不是你自己创建的笔记，建议换一个名字（可以点“随机生成”）。\n\n' +
+            '如果你知道它的密码，可以继续——点“确定”进入解锁页面。'
+          );
+          if (proceed) location.href = "/" + encodeURIComponent(name);
+        } else {
+          location.href = "/" + encodeURIComponent(name);
+        }
+      }).catch(function () {
+        goBtn.disabled = false;
+        goBtn.textContent = "打开 / 新建";
+        location.href = "/" + encodeURIComponent(name); // 网络异常时交给目标页面自己判断
+      });
+    };
+    input.addEventListener("keydown", function (e) { if (e.key === "Enter") goBtn.click(); });
+
+    app.appendChild(title);
+    app.appendChild(hint);
+    app.appendChild(el("div", { style: "display:flex; gap:8px;" }, [input, randomBtn]));
+    app.appendChild(el("div", { class: "actions" }, [goBtn]));
+  }
+
+  function ttlLabel(seconds) {
+    switch (String(seconds)) {
+      case "3600": return "1 小时后自动删除";
+      case "86400": return "1 天后自动删除";
+      case "604800": return "7 天后自动删除";
+      case "2592000": return "30 天后自动删除";
+      default: return "永久保存";
+    }
+  }
+
+  function renderCreate(id) {
+    app.innerHTML = "";
+    app.appendChild(el("h2", {}, [document.createTextNode('新建笔记 "' + id + '"')]));
+    app.appendChild(el("div", { class: "hint" }, [document.createTextNode(
+      "这个名字还没有人用过。设置一个密码来加密你的内容——请记牢，密码不会被保存，也无法找回。"
+    )]));
+
+    var pwd1 = el("input", { type: "password", placeholder: "设置密码" });
+    var pwd2 = el("input", { type: "password", placeholder: "确认密码" });
+
+    var ttlSelect = el("select", {}, []);
+    [["0", "永久保存"], ["3600", "1 小时后自动删除"], ["86400", "1 天后自动删除"],
+     ["604800", "7 天后自动删除"], ["2592000", "30 天后自动删除"]].forEach(function (opt) {
+      var o = el("option", { value: opt[0] }, [document.createTextNode(opt[1])]);
+      ttlSelect.appendChild(o);
+    });
+
+    var burnCheckbox = el("input", { type: "checkbox", id: "burnChk" });
+    var burnRow = el("div", { class: "checkbox-row" }, [
+      burnCheckbox,
+      el("label", { for: "burnChk" }, [document.createTextNode("阅后即焚（内容被读取一次后立刻从服务器删除）")])
+    ]);
+
+    var errBox = el("div", { class: "error" }, []);
+    var createBtn = el("button", { class: "btn-primary" }, [document.createTextNode("创建笔记")]);
+
+    createBtn.onclick = function () {
+      var p1 = pwd1.value, p2 = pwd2.value;
+      if (!p1) { errBox.textContent = "请输入密码"; return; }
+      if (p1 !== p2) { errBox.textContent = "两次密码不一致"; return; }
+      errBox.textContent = "";
+      var salt = crypto.getRandomValues(new Uint8Array(16));
+      deriveKey(p1, salt).then(function (key) {
+        renderEditor(id, key, salt, "", {
+          ttl: ttlSelect.value,
+          burnAfterRead: burnCheckbox.checked,
+          isNew: true
+        });
+      });
+    };
+
+    app.appendChild(el("div", {}, [
+      el("label", {}, [document.createTextNode("密码")]), pwd1,
+      el("label", {}, [document.createTextNode("确认密码")]), pwd2,
+      el("label", {}, [document.createTextNode("自动删除")]), ttlSelect,
+      burnRow
+    ]));
+    app.appendChild(errBox);
+    app.appendChild(el("div", { class: "actions" }, [createBtn]));
+  }
+
+  function renderUnlock(id, data) {
+    app.innerHTML = "";
+    app.appendChild(el("h2", {}, [document.createTextNode('解锁笔记 "' + id + '"')]));
+
+    var metaBits = [];
+    if (data.expiresAt) {
+      var remain = Math.max(0, data.expiresAt - Date.now());
+      var hrs = Math.round(remain / 3600000);
+      metaBits.push(hrs >= 1 ? ("约 " + hrs + " 小时后自动删除") : "即将自动删除");
+    } else {
+      metaBits.push("永久保存");
+    }
+    if (data.burnAfterRead) metaBits.push("阅后即焚（本次读取后将被删除）");
+
+    app.appendChild(el("div", { class: "hint" }, [document.createTextNode(metaBits.join(" · "))]));
+
+    var pwd = el("input", { type: "password", placeholder: "输入密码解锁" });
+    var errBox = el("div", { class: "error" }, []);
+    var unlockBtn = el("button", { class: "btn-primary" }, [document.createTextNode("解锁")]);
+
+    function tryUnlock() {
+      var p = pwd.value;
+      if (!p) return;
+      var salt = new Uint8Array(b64ToBuf(data.salt));
+      deriveKey(p, salt).then(function (key) {
+        return decryptText(data.ciphertext, data.iv, key).then(function (plain) {
+          renderEditor(id, key, salt, plain, {
+            ttl: data.expiresAt ? "" : "0",
+            burnAfterRead: data.burnAfterRead,
+            isNew: false
+          });
+        });
+      }).catch(function () {
+        errBox.textContent = "密码错误或内容已损坏";
+      });
+    }
+
+    unlockBtn.onclick = tryUnlock;
+    pwd.addEventListener("keydown", function (e) { if (e.key === "Enter") tryUnlock(); });
+
+    app.appendChild(el("div", {}, [pwd]));
+    app.appendChild(errBox);
+    app.appendChild(el("div", { class: "actions" }, [unlockBtn]));
+  }
+
+  function renderEditor(id, key, salt, initialText, opts) {
+    // 阅后即焚的笔记：只要是"打开一个已存在的笔记"（不是刚创建），
+    // 说明服务器上的数据已经在这次解锁时被删除了——这里必须切成只读展示，
+    // 绝不能再挂自动保存，否则一直不关页面继续打字就会把内容重新写回服务器，
+    // “阅后即焚”就形同虚设了。
+    if (!opts.isNew && opts.burnAfterRead) {
+      return renderBurnedView(initialText);
+    }
+
+    app.innerHTML = "";
+
+    var toolbar = el("div", { class: "toolbar" }, []);
+    var meta = el("div", { class: "meta" }, [document.createTextNode("")]);
+
+    var ttlSelect = el("select", {}, []);
+    [["0", "永久保存"], ["3600", "1 小时后自动删除"], ["86400", "1 天后自动删除"],
+     ["604800", "7 天后自动删除"], ["2592000", "30 天后自动删除"]].forEach(function (o) {
+      var optEl = el("option", { value: o[0] }, [document.createTextNode(o[1])]);
+      if (o[0] === String(opts.ttl)) optEl.selected = true;
+      ttlSelect.appendChild(optEl);
+    });
+
+    var copyLinkBtn = el("button", { class: "btn-ghost" }, [document.createTextNode("复制链接")]);
+    copyLinkBtn.onclick = function () {
+      var link = location.origin + "/" + encodeURIComponent(id);
+      copyToClipboard(link, copyLinkBtn, "复制链接");
+    };
+
+    var deleteBtn = el("button", { class: "btn-danger" }, [document.createTextNode("立即删除笔记")]);
+    deleteBtn.onclick = function () {
+      if (!confirm("确定要立即永久删除这篇笔记吗？此操作无法撤销。")) return;
+      fetch("/api/note/" + encodeURIComponent(id), { method: "DELETE" })
+        .then(function () { location.href = "/"; });
+    };
+
+    var rightBtns = el("div", { class: "actions" }, [ttlSelect, copyLinkBtn, deleteBtn]);
+    toolbar.appendChild(meta);
+    toolbar.appendChild(rightBtns);
+
+    var textarea = el("textarea", {}, []);
+    textarea.value = initialText || "";
+
+    app.appendChild(toolbar);
+    app.appendChild(textarea);
+
+    var saveTimer = null;
+    function scheduleSave() {
+      meta.textContent = "输入中...";
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(doSave, 900);
+    }
+
+    function doSave() {
+      var text = textarea.value;
+      encryptText(text, key).then(function (r) {
+        var body = {
+          salt: bufToB64(salt.buffer || salt),
+          iv: r.ivB64,
+          ciphertext: r.ciphertextB64,
+          burnAfterRead: opts.burnAfterRead,
+          ttl: ttlSelect.value
+        };
+        return fetch("/api/note/" + encodeURIComponent(id), {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body)
+        });
+      }).then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.error) { meta.textContent = "保存失败：" + data.error; return; }
+          var now = new Date();
+          var timeStr = now.getHours() + ":" + String(now.getMinutes()).padStart(2, "0") + ":" + String(now.getSeconds()).padStart(2, "0");
+          meta.textContent = "已保存 " + timeStr + (data.expiresAt ? "（" + ttlLabel(ttlSelect.value) + "）" : "（永久保存）");
+        })
+        .catch(function () { meta.textContent = "保存失败，请检查网络"; });
+    }
+
+    textarea.addEventListener("input", scheduleSave);
+    ttlSelect.addEventListener("change", scheduleSave);
+
+    if (opts.isNew) doSave();
+    else meta.textContent = "已解锁";
+
+    textarea.focus();
+  }
+
+  function renderBurnedView(text) {
+    app.innerHTML = "";
+    app.appendChild(el("h2", {}, [document.createTextNode("这条笔记已被阅读，并从服务器上删除")]));
+    app.appendChild(el("div", { class: "hint" }, [document.createTextNode(
+      "这是一条“阅后即焚”笔记，服务器上的数据已经在你刚才解锁的这一刻被永久删除了。" +
+      "下面显示的是这仅有一次的内容——不会再被保存，关闭或刷新这个页面后就彻底看不到了。" +
+      "如果需要保留，请现在就复制走。"
+    )]));
+
+    var textarea = el("textarea", { readonly: "readonly" }, []);
+    textarea.value = text || "";
+    app.appendChild(textarea);
+
+    var copyBtn = el("button", { class: "btn-primary" }, [document.createTextNode("复制内容")]);
+    copyBtn.onclick = function () { copyToClipboard(text, copyBtn, "复制内容"); };
+
+    var homeBtn = el("button", { class: "btn-ghost" }, [document.createTextNode("返回首页")]);
+    homeBtn.onclick = function () { location.href = "/"; };
+
+    app.appendChild(el("div", { class: "actions" }, [copyBtn, homeBtn]));
+  }
+})();
+</script>
+</body>
+</html>

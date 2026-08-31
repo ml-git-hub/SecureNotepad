@@ -1,0 +1,28 @@
+name = "secure-notepad"
+main = "src/index.js"
+compatibility_date = "2026-08-27"
+
+# 静态资源：public/ 目录下的 index.html / admin.html / styles.css
+# not_found_handling = "single-page-application" 让浏览器直接访问的
+# 任意笔记地址（比如 /my-note）都兜底返回 index.html，由前端 JS 处理路由。
+[assets]
+directory = "./public/"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# D1 数据库绑定，用于存储加密后的笔记内容和元数据
+# 部署前需要先创建，见 README.md
+[[d1_databases]]
+binding = "DB"
+database_name = "secure-notepad-db"
+database_id = "c46cbe9a-fcbd-4710-a95d-ca3bc9c9b0b1"
+
+# 定时任务：每 15 分钟清理一次已过期的笔记
+[triggers]
+crons = ["*/15 * * * *"]
+
+[observability]
+enabled = true
+
+# 管理后台密钥不要写在这个文件里，部署后用下面的命令设置：
+#   wrangler secret put ADMIN_TOKEN
