@@ -15,7 +15,7 @@ not_found_handling = "single-page-application"
 [[d1_databases]]
 binding = "DB"
 database_name = "secure-notepad-db"
-database_id = "c46cbe9a-fcbd-4710-a95d-ca3bc9c9b0b1"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 
 # 定时任务：每 15 分钟清理一次已过期的笔记
 [triggers]
